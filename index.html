@@ -379,6 +379,34 @@
     font-family:'Fraunces',serif;font-style:italic;font-weight:400;
     font-size:1.35rem;margin-top:8px;
   }
+  .qty-row{
+    width:100%;
+    display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:14px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.72rem;
+    color:var(--parchemin-att);
+  }
+  .qty-stepper{
+    display:flex;align-items:center;gap:2px;
+  }
+  .qty-stepper button{
+    width:28px;height:28px;
+    border:1px solid rgba(184,147,90,0.35);
+    background:transparent;
+    color:var(--or-vif);
+    font-size:1rem;
+    line-height:1;
+    cursor:pointer;
+    border-radius:2px;
+  }
+  .qty-stepper button:hover{border-color:var(--or-vif);}
+  .qty-stepper button:disabled{opacity:0.3;cursor:default;}
+  .qty-stepper span{
+    width:32px;text-align:center;
+    font-size:0.85rem;color:var(--parchemin);
+  }
+
   .order-summary{
     width:100%;
     border:1px solid rgba(184,147,90,0.25);
@@ -876,9 +904,18 @@
         <h3>Régler l'enveloppe</h3>
       </div>
 
+      <div class="qty-row">
+        <span>Nombre d'enveloppes</span>
+        <div class="qty-stepper">
+          <button type="button" id="qtyMinus" aria-label="Moins">−</button>
+          <span id="qtyValue">1</span>
+          <button type="button" id="qtyPlus" aria-label="Plus">+</button>
+        </div>
+      </div>
+
       <div class="order-summary">
-        <span>1 enveloppe scellée</span>
-        <span class="price">0,99 €</span>
+        <span id="orderLabel">1 enveloppe scellée</span>
+        <span class="price" id="orderPrice">0,99 €</span>
       </div>
 
       <button class="express-pay" id="expressPay">
@@ -894,7 +931,7 @@
           <input class="card-field" type="text" placeholder="MM / AA" autocomplete="cc-exp">
           <input class="card-field" type="text" inputmode="numeric" placeholder="CVC" autocomplete="cc-csc">
         </div>
-        <button type="submit" class="buy-btn pay-submit">Payer 0,99 €</button>
+        <button type="submit" class="buy-btn pay-submit" id="paySubmitBtn">Payer 0,99 €</button>
       </form>
 
       <div class="secure-note">Paiement chiffré · aucune donnée de carte stockée sur ce site</div>
@@ -1017,6 +1054,30 @@
     const overlayActions = document.getElementById('overlayActions');
     const closeBtn = document.getElementById('closeOverlay');
     const overlayCta = document.getElementById('overlayCta');
+    const qtyMinus = document.getElementById('qtyMinus');
+    const qtyPlus = document.getElementById('qtyPlus');
+    const qtyValue = document.getElementById('qtyValue');
+    const orderLabel = document.getElementById('orderLabel');
+    const orderPrice = document.getElementById('orderPrice');
+    const paySubmitBtn = document.getElementById('paySubmitBtn');
+
+    const UNIT_PRICE = 0.99;
+    const MAX_QTY = 10;
+    let checkoutQty = 1;
+
+    function renderQty(){
+      const maxAllowed = Math.max(1, Math.min(MAX_QTY, stock));
+      checkoutQty = Math.min(checkoutQty, maxAllowed);
+      qtyValue.textContent = checkoutQty;
+      qtyMinus.disabled = checkoutQty <= 1;
+      qtyPlus.disabled = checkoutQty >= maxAllowed;
+      orderLabel.textContent = checkoutQty + (checkoutQty > 1 ? ' enveloppes scellées' : ' enveloppe scellée');
+      const total = (checkoutQty * UNIT_PRICE).toFixed(2).replace('.', ',');
+      orderPrice.textContent = total + ' €';
+      paySubmitBtn.textContent = 'Payer ' + total + ' €';
+    }
+    qtyMinus.addEventListener('click', () => { checkoutQty = Math.max(1, checkoutQty - 1); renderQty(); });
+    qtyPlus.addEventListener('click', () => { checkoutQty = Math.min(MAX_QTY, stock, checkoutQty + 1); renderQty(); });
 
     // Répartition des tickets par enveloppe : 89% perdant, 10% rare, 1% gagnant.
     // Tirage fait ici pour la démo uniquement — en production, ce tirage doit être
@@ -1118,7 +1179,11 @@
       }, 300));
 
       try {
-        const res = await fetch('/api/create-checkout-session', { method: 'POST' });
+        const res = await fetch('/api/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quantity: checkoutQty }),
+        });
         if(!res.ok) throw new Error('backend indisponible');
         const data = await res.json();
         if(!data.url) throw new Error('réponse invalide');
@@ -1132,7 +1197,7 @@
 
       timers.push(setTimeout(() => {
         processingStage.classList.remove('show');
-        stock -= 1;
+        stock -= checkoutQty;
         renderStock();
         showSelectStage();
       }, 1200));
@@ -1178,7 +1243,8 @@
       }, 380));
     }
 
-    let pendingRealTier = null;
+    let pendingRealTiers = null;
+    let pendingTierIndex = 0;
     let pendingRealSessionId = null;
     const ticketPseudoForm = document.getElementById('ticketPseudoForm');
     const pseudoInput = document.getElementById('pseudoInput');
@@ -1231,11 +1297,12 @@
 
       let tier;
       let isRealResult = false;
-      if(pendingRealTier){
+      let hasMoreReal = false;
+      if(pendingRealTiers && pendingTierIndex < pendingRealTiers.length){
         // Résultat réel, tiré côté serveur au moment du paiement.
-        tier = pendingRealTier;
+        tier = pendingRealTiers[pendingTierIndex];
         isRealResult = true;
-        pendingRealTier = null;
+        hasMoreReal = pendingTierIndex < pendingRealTiers.length - 1;
       } else {
         // Repli de démo (aucun paiement réel associé à cette ouverture).
         const roll = Math.random();
@@ -1266,7 +1333,15 @@
         ticket.classList.add('reveal');
         confettiForTier(tier);
       }, 2100));
-      timers.push(setTimeout(() => overlayActions.classList.add('show'), 2700));
+      timers.push(setTimeout(() => {
+        overlayActions.classList.add('show');
+        if(hasMoreReal){
+          const restantes = pendingRealTiers.length - pendingTierIndex - 1;
+          overlayCta.textContent = 'Ouvrir la suivante (' + restantes + ' restante' + (restantes > 1 ? 's' : '') + ')';
+        } else {
+          overlayCta.textContent = 'Fermer';
+        }
+      }, 2700));
     }
 
     function showSelectStage(){
@@ -1280,6 +1355,10 @@
       clearTimers();
       cardForm.reset();
       pendingRealSessionId = null;
+      pendingRealTiers = null;
+      pendingTierIndex = 0;
+      checkoutQty = 1;
+      renderQty();
       checkoutStage.classList.remove('hide');
       processingStage.classList.remove('show');
       selectStage.classList.add('hide');
@@ -1292,10 +1371,13 @@
 
     // Reprend le parcours juste après un vrai paiement Stripe : le paiement est
     // déjà fait, donc on saute directement à la sélection d'enveloppe, et on va
-    // chercher le résultat tiré par le webhook pendant que l'utilisateur choisit.
+    // chercher les résultats tirés par le webhook (un par enveloppe achetée)
+    // pendant que l'utilisateur choisit.
     window.resumeAfterPayment = async function(sessionId){
       clearTimers();
       pendingRealSessionId = sessionId;
+      pendingRealTiers = null;
+      pendingTierIndex = 0;
       checkoutStage.classList.add('hide');
       processingStage.classList.remove('show');
       openScene.classList.remove('show');
@@ -1311,8 +1393,9 @@
           const res = await fetch('/api/result?session_id=' + encodeURIComponent(sessionId));
           if(res.ok){
             const data = await res.json();
-            if(data.tier){
-              pendingRealTier = data.tier;
+            if(Array.isArray(data.tiers) && data.tiers.length){
+              pendingRealTiers = data.tiers;
+              pendingTierIndex = 0;
               return;
             }
           }
@@ -1332,7 +1415,14 @@
     }
 
     closeBtn.addEventListener('click', closeOverlay);
-    overlayCta.addEventListener('click', closeOverlay);
+    overlayCta.addEventListener('click', () => {
+      if(pendingRealTiers && pendingTierIndex < pendingRealTiers.length - 1){
+        pendingTierIndex++;
+        showSelectStage();
+      } else {
+        closeOverlay();
+      }
+    });
     overlay.addEventListener('click', (e) => { if(e.target === overlay) closeOverlay(); });
     document.addEventListener('keydown', (e) => {
       if(e.key === 'Escape' && overlay.classList.contains('active')) closeOverlay();
