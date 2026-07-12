@@ -1,37 +1,64 @@
-// Fonction serveur (Vercel) : crée une session de paiement Stripe.
-// Ne contient jamais votre clé secrète côté navigateur — elle vit uniquement
-// ici, en variable d'environnement (STRIPE_SECRET_KEY).
+// Webhook Stripe : Stripe appelle CETTE fonction directement (pas le navigateur
+// du client) pour confirmer qu'un paiement a réellement abouti. C'est la seule
+// source fiable — ne jamais faire confiance à la redirection du navigateur seule.
 
 const Stripe = require('stripe');
+const { createClient } = require('redis');
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+let client;
+async function getClient(){
+  if(!client){
+    client = createClient({ url: process.env.REDIS_URL });
+    client.on('error', (err) => console.error('Erreur Redis :', err));
+  }
+  if(!client.isOpen){
+    await client.connect();
+  }
+  return client;
+}
+
+const KEY = 'stock_remaining';
+
 module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Méthode non autorisée' });
-  }
+  const sig = req.headers['stripe-signature'];
+  const buf = await buffer(req);
 
+  let event;
   try {
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      line_items: [
-        {
-          price_data: {
-            currency: 'eur',
-            product_data: { name: 'Enveloppe — La Chance, Édition Nocturne' },
-            unit_amount: 99, // 0,99 € en centimes
-          },
-          quantity: 1,
-        },
-      ],
-      // Stripe Checkout gère automatiquement carte, Apple Pay et Google Pay :
-      // rien à coder en plus pour les afficher.
-      success_url: `${req.headers.origin}/?paiement=succes&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${req.headers.origin}/?paiement=annule`,
-    });
-
-    res.status(200).json({ url: session.url });
+    event = stripe.webhooks.constructEvent(buf, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.error('Erreur Stripe:', err.message);
-    res.status(500).json({ error: err.message });
+    return res.status(400).send(`Erreur de signature webhook : ${err.message}`);
   }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+
+    const redis = await getClient();
+    const current = await redis.get(KEY);
+    if(current === null || current === undefined){
+      await redis.set(KEY, 200);
+    }
+    const remaining = await redis.decr(KEY);
+    if(remaining < 0){
+      await redis.set(KEY, 0); // sécurité anti-survente si jamais ça passe sous 0
+    }
+
+    // Reste à faire (voir README) : tirer le ticket (perdant / rare / gagnant)
+    // et l'associer à session.id pour que la page de résultat puisse le relire.
+  }
+
+  res.json({ received: true });
 };
+
+module.exports.config = { api: { bodyParser: false } };
+
+function buffer(readable) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    readable.on('data', (chunk) => chunks.push(chunk));
+    readable.on('end', () => resolve(Buffer.concat(chunks)));
+    readable.on('error', reject);
+  });
+}
