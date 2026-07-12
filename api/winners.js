@@ -56,9 +56,16 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ error: 'pseudo invalide' });
       }
 
-      const tier = await redis.get('result:' + sessionId);
-      if(tier !== 'win'){
-        return res.status(403).json({ error: "cette session n'est pas un ticket gagnant" });
+      const raw = await redis.get('result:' + sessionId);
+      let tiers = [];
+      try {
+        tiers = JSON.parse(raw);
+        if(!Array.isArray(tiers)) tiers = [raw];
+      } catch {
+        tiers = raw ? [raw] : [];
+      }
+      if(!tiers.includes('win')){
+        return res.status(403).json({ error: "cette session n'a pas de ticket gagnant" });
       }
 
       const already = await redis.get('winner_submitted:' + sessionId);
