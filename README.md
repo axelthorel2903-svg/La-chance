@@ -35,3 +35,4 @@ Une fois les tests concluants : bascule le Dashboard Stripe en *mode live*, réc
 ## Ce qui reste à faire ensuite
 - Une vraie base de données pour le stock d'enveloppes et le tirage des tickets (le webhook contient déjà l'endroit exact où brancher ça).
 - Une page de résultat qui relit le tirage via `session_id` au retour de Stripe, plutôt que de le calculer dans le navigateur.
+- <!-- trigger -->
