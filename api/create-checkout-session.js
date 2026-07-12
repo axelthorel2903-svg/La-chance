@@ -2,10 +2,10 @@
 // Ne contient jamais votre clé secrète côté navigateur — elle vit uniquement
 // ici, en variable d'environnement (STRIPE_SECRET_KEY).
 
-import Stripe from 'stripe';
+const Stripe = require('stripe');
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Méthode non autorisée' });
   }
@@ -31,6 +31,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ url: session.url });
   } catch (err) {
+    console.error('Erreur Stripe:', err.message);
     res.status(500).json({ error: err.message });
   }
-}
+};
