@@ -906,10 +906,10 @@
 </footer>
 
 <script>
-  // --- Démo : stock simulé côté client ---
-  // En production, remplacer par un vrai compteur lu depuis votre base de données
-  // (ex: table "editions" avec colonne "enveloppes_restantes", mise à jour à chaque achat,
-  // et un websocket ou polling pour l'afficher en temps réel à tous les visiteurs).
+  // --- Stock réel, partagé entre tous les visiteurs ---
+  // Lu depuis /api/stock (Upstash Redis), mis à jour par le webhook Stripe
+  // à chaque paiement confirmé. On garde 47/200 comme repli le temps du
+  // premier chargement, ou si le backend n'est pas encore déployé.
   let stock = 47;
   const total = 200;
 
@@ -918,6 +918,22 @@
     document.getElementById('navStock').textContent = stock + ' / ' + total + ' restantes';
   }
   renderStock();
+
+  async function refreshStock(){
+    try {
+      const res = await fetch('/api/stock');
+      if(!res.ok) throw new Error('backend indisponible');
+      const data = await res.json();
+      if(typeof data.remaining === 'number'){
+        stock = data.remaining;
+        renderStock();
+      }
+    } catch (err){
+      console.warn('Stock réel indisponible, valeur de démo conservée :', err.message);
+    }
+  }
+  refreshStock();
+  setInterval(refreshStock, 15000); // toutes les 15s, pour refléter les achats des autres visiteurs
 
   document.getElementById('buyBtn').addEventListener('click', () => {
     if(stock > 0){
